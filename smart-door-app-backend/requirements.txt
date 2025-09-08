@@ -1,0 +1,9 @@
+Django==3.2.*
+djangorestframework==3.14.*
+django-cors-headers
+django-extensions
+gunicorn
+mysqlclient
+PyJWT>=2.8
+requests
+cryptography

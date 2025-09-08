@@ -1,0 +1,9 @@
+{
+  "editor.defaultFormatter": "esbenp.prettier-vscode", // Prettier를 기본 포매터로 설정
+  "[python]": {
+    // Python 파일에 대해 Black을 사용
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "editor.formatOnSave": true,
+  "python-envs.pythonProjects": [] // 저장할 때 자동 포매팅
+}

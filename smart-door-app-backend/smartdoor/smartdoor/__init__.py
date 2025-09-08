@@ -1,0 +1,3 @@
+"""SmartDoor Django project package."""
+
+
