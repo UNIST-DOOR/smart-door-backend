@@ -5,14 +5,15 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# 시스템 패키지(빌드용 gcc + mysqlclient 빌드 헤더)
+# 시스템 패키지(빌드용 gcc + mysqlclient 빌드 헤더 + curl for healthcheck)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
     python3-dev \
     pkg-config \
-    default-libmysqlclient-dev && \
+    default-libmysqlclient-dev \
+    curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
     
