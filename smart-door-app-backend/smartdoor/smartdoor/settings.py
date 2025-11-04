@@ -28,6 +28,7 @@ else:
     ALLOWED_HOSTS = [
         "smartdoor-backend.unist.ac.kr",
         "smartdoor-backend.unist.re.kr",
+        "localhost",
     ]
 
 
