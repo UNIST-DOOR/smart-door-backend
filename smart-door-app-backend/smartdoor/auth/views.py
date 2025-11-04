@@ -4,6 +4,11 @@ from rest_framework import status
 from django.conf import settings
 from auth.decorators import token_required
 from django.db import connection
+from datetime import datetime
+import logging
+import traceback
+
+logger = logging.getLogger(__name__)
 
 
 # 현재 사용자 정보 반환
@@ -226,3 +231,218 @@ def room_info(request):
 
     except Exception as e:
         return Response({"ok": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@token_required
+def door_log(request):
+    """
+    문 열림 이벤트 로깅
+    
+    Headers:
+        Authorization: Bearer <azure_ad_token>
+    
+    Request Body:
+        {
+            "platform": "android" or "ios",
+            "doorType": "door" or "relay"
+        }
+    
+    Response:
+        200 OK:
+            {
+                "ok": true,
+                "message": "Door log saved successfully",
+                "logId": 102480
+            }
+        400 Bad Request: 잘못된 요청 파라미터
+        401 Unauthorized: 토큰 없음 또는 유효하지 않음
+        500 Internal Server Error: 서버 오류
+    """
+    try:
+        logger.info("=== Door log API called ===")
+        logger.info(f"Request data: {request.data}")
+        logger.info(f"Request headers: {dict(request.headers)}")
+        # 1. 요청 데이터 검증
+        platform = request.data.get("platform", "").lower()
+        door_type = request.data.get("doorType", "").lower()
+        
+        if platform not in ["android", "ios"]:
+            return Response({
+                "ok": False,
+                "error": "Invalid platform. Must be 'android' or 'ios'"
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        if door_type not in ["door", "relay"]:
+            return Response({
+                "ok": False,
+                "error": "Invalid doorType. Must be 'door' or 'relay'"
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 플랫폼 코드 변환
+        platform_code = "0x01" if platform == "android" else "0x02"
+        
+        # 2. 토큰에서 UPN 추출
+        user_info = getattr(request, "_user", {}) or {}
+        upn = (
+            user_info.get("upn")
+            or user_info.get("preferred_username")
+            or user_info.get("email")
+            or ""
+        ).strip()
+        
+        if not upn:
+            return Response({
+                "ok": False,
+                "error": "UPN not found in token"
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 3. UPN으로 학번 조회
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT MAST_IDNO
+                FROM umcs_mast
+                WHERE LOWER(TRIM(MAST_MAIL)) = LOWER(TRIM(%s))
+                AND MAST_STCO NOT IN ('0', '2', '5')
+                ORDER BY MAST_UPDT DESC
+                LIMIT 1
+                """,
+                [upn],
+            )
+            row = cursor.fetchone()
+        
+        if not row:
+            return Response({
+                "ok": False,
+                "error": "User not found in system"
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        student_id = str(row[0])
+        
+        # 4. 학번으로 방 정보 조회 (fo_door_tran → fo_room_code)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT DOOR_TRAN_ROOM
+                FROM fo_door_tran
+                WHERE (CAST(DOOR_TRAN_STNO AS CHAR) = %s OR CAST(DOOR_TRAN_STNO AS UNSIGNED) = CAST(%s AS UNSIGNED))
+                ORDER BY DOOR_TRAN_FDATE DESC, DOOR_TRAN_LDATE DESC, DOOR_TRAN_IDATE DESC, DOOR_TRAN_SEQ DESC
+                LIMIT 1
+                """,
+                [student_id, student_id],
+            )
+            room_row = cursor.fetchone()
+        
+        if not room_row:
+            return Response({
+                "ok": False,
+                "error": "Room not assigned to student"
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        room_key = str(room_row[0])
+        
+        # 5. 방 키로 방번호와 BridgeID 조회
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT ROOM_CODE_NUM, ROOM_CODE_BRIDGEID
+                FROM fo_room_code
+                WHERE ROOM_CODE_KEY = %s
+                LIMIT 1
+                """,
+                [room_key],
+            )
+            room_info = cursor.fetchone()
+        
+        if not room_info:
+            return Response({
+                "ok": False,
+                "error": "Room information not found"
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        room_number = str(room_info[0])
+        bridge_id = str(room_info[1])
+        
+        # 6. 현재 시간 (MySQL datetime 포맷: 24시간 형식)
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 7. mqtt_cmd_log 테이블에 INSERT
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO mqtt_cmd_log (
+                    LOG_CMD_BS,
+                    LOG_CMD_NUM,
+                    LOG_CMD_TIME,
+                    LOG_CMD_TYPE,
+                    LOG_CMD_MC,
+                    LOG_CMD_SERIAL,
+                    LOG_CMD_0,
+                    LOG_CMD_1,
+                    LOG_CMD_2,
+                    LOG_CMD_3,
+                    LOG_CMD_4,
+                    LOG_CMD_5,
+                    LOG_CMD_6,
+                    LOG_CMD_7,
+                    LOG_CMD_8,
+                    LOG_CMD_9,
+                    LOG_CMD_10,
+                    LOG_CMD_11,
+                    LOG_CMD_OPEN,
+                    LOG_CMD_USER,
+                    LOG_CMD_ACTION
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                """,
+                [
+                    "0020001",  # LOG_CMD_BS (고정)
+                    room_number,  # LOG_CMD_NUM (방번호)
+                    current_time,  # LOG_CMD_TIME
+                    "rec",  # LOG_CMD_TYPE (고정)
+                    door_type,  # LOG_CMD_MC (door or relay)
+                    bridge_id,  # LOG_CMD_SERIAL (BridgeID)
+                    '"0":"0xcc","1":"0x81","2":"0x05","3":"0x0b","4":"0x00","5":"0x00","6":"0x00","7":"0x00","8":"0x00","9":"0x5c"',  # LOG_CMD_0 (고정)
+                    "0x81",  # LOG_CMD_1 (고정)
+                    "0x05",  # LOG_CMD_2 (고정)
+                    platform_code,  # LOG_CMD_3 (플랫폼: 0x01=Android, 0x02=iOS)
+                    "0x00",  # LOG_CMD_4 (고정)
+                    "0x00",  # LOG_CMD_5 (고정)
+                    "0x00",  # LOG_CMD_6 (고정)
+                    "0x00",  # LOG_CMD_7 (고정)
+                    "0x00",  # LOG_CMD_8 (고정)
+                    "0x00",  # LOG_CMD_9 (고정)
+                    "0x00",  # LOG_CMD_10 (고정)
+                    "0x00",  # LOG_CMD_11 (고정)
+                    "0110003",  # LOG_CMD_OPEN (고정)
+                    student_id,  # LOG_CMD_USER (학번)
+                    None,  # LOG_CMD_ACTION (NULL)
+                ],
+            )
+            log_id = cursor.lastrowid
+        
+        return Response({
+            "ok": True,
+            "message": "Door log saved successfully",
+            "data": {
+                "logId": log_id,
+                "studentId": student_id,
+                "roomNumber": room_number,
+                "doorType": door_type,
+                "platform": platform,
+                "timestamp": current_time
+            }
+        }, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error("=== Door log API ERROR ===")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error message: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return Response({
+            "ok": False,
+            "error": str(e),
+            "error_type": type(e).__name__
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

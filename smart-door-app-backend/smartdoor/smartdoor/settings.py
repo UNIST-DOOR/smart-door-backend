@@ -21,6 +21,7 @@ if DEBUG:
     ALLOWED_HOSTS = [
         "localhost",
         "192.168.0.24",
+        "10.0.2.2",
         # "192.168.219.102"
     ]
 else:
@@ -119,17 +120,29 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[{levelname}] {asctime} {name} - {message}",
+            "style": "{",
+        },
+    },
     "handlers": {
         "console": {
-            "level": "INFO",  # INFO 이상의 로그를 출력하도록 설정
+            "level": "DEBUG",
             "class": "logging.StreamHandler",
+            "formatter": "verbose",
         },
     },
     "loggers": {
         "": {
             "handlers": ["console"],
-            "level": "INFO",  # 최상위 로거에 대한 레벨 설정
+            "level": "DEBUG",
             "propagate": True,
+        },
+        "auth": {
+            "handlers": ["console"],
+            "level": "DEBUG",
+            "propagate": False,
         },
     },
 }
