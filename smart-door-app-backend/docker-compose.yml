@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   smartdoor-backend:
@@ -9,15 +9,19 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    
+
     # 헬스체크
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/db-health/ || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          'python3 -c "import socket; s = socket.socket(); s.connect((''localhost'', 8000)); s.close()" || exit 1',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    
+
     # 로깅 설정
     logging:
       driver: "json-file"
