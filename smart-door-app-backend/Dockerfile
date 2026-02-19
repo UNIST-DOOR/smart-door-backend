@@ -27,5 +27,4 @@ COPY ./smartdoor ./smartdoor
 
 EXPOSE 8000
 
-# 운영: gunicorn로 실행 (smartdoor 패키지 기준)
-CMD ["gunicorn", "--chdir", "/app/smartdoor", "smartdoor.wsgi:application", "-b", "0.0.0.0:8000", "-w", "3", "--threads", "2", "--timeout", "120"]
+CMD ["gunicorn", "--chdir", "/app/smartdoor", "smartdoor.wsgi:application", "-b", "0.0.0.0:8000", "-w", "3", "--threads", "2", "--timeout", "120", "--max-requests", "1000", "--max-requests-jitter", "100"]

@@ -77,6 +77,7 @@ DATABASES = {
         "OPTIONS": {
             "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
         },
+        "CONN_MAX_AGE": 300,  # 연결 5분 후 재생성 (Django 공식 권장)
     }
 }
 

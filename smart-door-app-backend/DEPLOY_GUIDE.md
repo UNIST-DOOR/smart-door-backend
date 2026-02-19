@@ -122,7 +122,17 @@ docker compose up -d --build
 
 ## 문제 해결
 
+# 메모리 확인
+docker stats smartdoor-backend
+
+# DB 연결 테스트
+docker exec smartdoor-backend python -c "from django.db import connection; connection.ensure_connection(); print('DB OK')"
+
+# 프로세스 상태
+docker top smartdoor-backend
 
 ## API 엔드포인트
 
 - **헬스체크**: `GET http://서버IP:8000/api/db-health/`
+
+

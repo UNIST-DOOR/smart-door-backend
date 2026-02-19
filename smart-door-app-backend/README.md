@@ -89,3 +89,30 @@ docker restart smartdoor-backend
 # 컨테이너 중지
 docker stop smartdoor-backend
 ```
+
+
+
+
+!!!!!! 다음에 문제 발생시 실행해야하는 코드
+
+# 1. 서버 상태 확인
+docker ps
+docker stats smartdoor-backend --no-stream
+
+# 2. Azure AD 관련 문제 확인
+docker logs smartdoor-backend 2>&1 | grep -i "auth.token\|JWT"
+
+# 3. DB 관련 문제 확인
+docker logs smartdoor-backend 2>&1 | grep -i "auth.views\|OperationalError"
+
+# 4. 전체 에러 확인
+docker logs smartdoor-backend 2>&1 | grep -i "error\|warning" | tail -50
+
+# 5. 특정 날짜 로그 확인 (예: 2026-02-19)
+docker logs smartdoor-backend 2>&1 | grep "2026-02-19" | tail -100
+
+# 6. 워커 타임아웃 확인
+docker logs smartdoor-backend 2>&1 | grep -i "timeout\|exited"
+
+# 7. 실시간 로그 모니터링 (Ctrl+C로 중단)
+docker logs -f smartdoor-backend
