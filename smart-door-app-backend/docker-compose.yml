@@ -1,33 +1,41 @@
-version: "3.8"
-
 services:
   smartdoor-backend:
     build: .
     container_name: smartdoor-backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     restart: unless-stopped
+    environment:
+      - PYTHONFAULTHANDLER=1
 
-    # 헬스체크
+    # HTTP 헬스체크 (실제 API 응답 확인)
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'python3 -c "import socket; s = socket.socket(); s.connect((''localhost'', 8000)); s.close()" || exit 1',
-        ]
+      test: ["CMD-SHELL", "curl -f -H 'X-Forwarded-Proto: https' http://localhost:8000/api/db-health/ || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 20s
       retries: 3
       start_period: 40s
 
-    # 로깅 설정
+    # 로깅 설정 (보존량 증가: 50MB × 5 = 250MB)
     logging:
       driver: "json-file"
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "50m"
+        max-file: "5"
+
+  # unhealthy 시 자동 재시작
+  autoheal:
+    image: willfarrell/autoheal
+    container_name: smartdoor-autoheal
+    restart: always
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=all
+      - AUTOHEAL_INTERVAL=60
+      - AUTOHEAL_START_PERIOD=120
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 networks:
   default:

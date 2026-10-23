@@ -62,7 +62,7 @@ def room_info(request):
                 SELECT MAST_IDNO
                 FROM umcs_mast
                 WHERE LOWER(TRIM(MAST_MAIL)) = LOWER(TRIM(%s))
-                AND (MAST_STCO NOT IN ('0', '2', '5') OR MAST_STCO IS NULL)
+                AND MAST_STCO = '1'
                 ORDER BY MAST_UPDT DESC
                 LIMIT 1
                 """,
@@ -304,7 +304,7 @@ def door_log(request):
                 SELECT MAST_IDNO
                 FROM umcs_mast
                 WHERE LOWER(TRIM(MAST_MAIL)) = LOWER(TRIM(%s))
-                AND MAST_STCO NOT IN ('0', '2', '5')
+                AND MAST_STCO = '1'
                 ORDER BY MAST_UPDT DESC
                 LIMIT 1
                 """,

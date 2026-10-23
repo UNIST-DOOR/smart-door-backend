@@ -1,48 +1,22 @@
-# Python bytecode files
-*.pyc
-*.pyo
-*.pyd
+# Certificates / keys (과거에 Wildcard 인증서 폴더가 올라간 적 있음)
+*.crt
+*.cer
+*.pem
+*.key
+*.pfx
+*.p12
+*.csr
+Wildcard*/
+*_crt/
 
-# __pycache__ directories
-__pycache__/
+# Secrets / local config
+secrets/
+*.secret
 
-# Django migrations (optional, only if not tracked)
-*/migrations/*.py
-!*/migrations/__init__.py
+# DB dumps / logs
+*.sql
+*.dump
+*.log
 
-# Virtual environment directory (if applicable)
-/env
-/venv
-/.venv
-
-# Local environment settings
-*.env
-.env.*
-
-# Frontend dependencies and build output
-/frontend/node_modules
-/frontend/.pnp
-/frontend/.pnp.js
-/frontend/build
-
-# Testing coverage
-/frontend/coverage
-
-# Misc
-.DS_Store
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Production environment files
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Editor-specific directories and files
-#.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
-
+# 예시 파일은 허용 (.env.* 규칙 예외)
+!.env.example
