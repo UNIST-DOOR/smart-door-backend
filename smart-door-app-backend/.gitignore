@@ -20,3 +20,7 @@ secrets/
 
 # 예시 파일은 허용 (.env.* 규칙 예외)
 !.env.example
+
+# Python 캐시
+__pycache__/
+*.pyc
