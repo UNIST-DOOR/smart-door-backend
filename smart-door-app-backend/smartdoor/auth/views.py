@@ -3,12 +3,24 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.conf import settings
 from auth.decorators import token_required
-from django.db import connection
+from django.db import OperationalError, connection
 from datetime import datetime
 import logging
 import traceback
+import uuid
+
+from auth import door_access
+from auth.door_db import DjangoDb, is_lost_connection, retry_on_lost_connection
+from auth.door_packet import KST, DoorPacketError, build_door_packet, build_open_frame
 
 logger = logging.getLogger(__name__)
+
+# 로그에 남겨도 되는 요청 헤더. 허용 목록 방식이라 Authorization(로그인 토큰), Cookie 등은 절대 남지 않는다.
+_LOGGABLE_HEADERS = ("X-App-Platform", "X-App-Build", "Content-Type", "User-Agent")
+
+
+def _headers_for_log(request):
+    return {name: request.headers.get(name) for name in _LOGGABLE_HEADERS if request.headers.get(name) is not None}
 
 
 # 현재 사용자 정보 반환
@@ -41,9 +53,7 @@ def db_health(request):
 
 
 # UPN으로 학번/방/동/BLEID 조회
-@api_view(["GET"])
-@token_required
-def room_info(request):
+def _room_info_impl(request):
     try:
         user_info = getattr(request, "_user", {}) or {}
         upn = (
@@ -229,8 +239,27 @@ def room_info(request):
             }
         return Response(payload, status=status.HTTP_200_OK)
 
+    except OperationalError as e:
+        if is_lost_connection(e):
+            raise  # 바깥의 retry_on_lost_connection 이 새로 연결해서 다시 실행한다
+        return Response({"ok": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except Exception as e:
         return Response({"ok": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# 조회만 하므로, DB 연결이 끊겨서 실패하면 연결을 새로 맺어 한 번 다시 시도한다.
+# 그래도 안 되면 503(잠시 후 재시도 가능)으로 알린다. 앱이 이를 "방 정보 없음"이나 로그아웃으로 오해하지 않게 하기 위함이다.
+_room_info_with_retry = retry_on_lost_connection(_room_info_impl)
+
+
+@api_view(["GET"])
+@token_required
+def room_info(request):
+    try:
+        return _room_info_with_retry(request)
+    except OperationalError as e:
+        logger.error("방 정보 조회: DB 연결 복구 실패 (%s)", e)
+        return Response({"ok": False, "error": "db_unavailable"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
 @api_view(["POST"])
@@ -262,7 +291,7 @@ def door_log(request):
     try:
         logger.info("=== Door log API called ===")
         logger.info(f"Request data: {request.data}")
-        logger.info(f"Request headers: {dict(request.headers)}")
+        logger.info(f"Request headers: {_headers_for_log(request)}")
         # 1. 요청 데이터 검증
         platform = request.data.get("platform", "").lower()
         door_type = request.data.get("doorType", "").lower()
@@ -446,3 +475,143 @@ def door_log(request):
             "error": str(e),
             "error_type": type(e).__name__
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ── 앱 BLE 서명 문열기 ─────────────────────────────────────────
+# 앱은 키를 갖지 않는다. 서버가 권한 확인, 키 조회, 패킷 생성과 서명을 맡고
+# 앱은 받은 바이트를 도어락 모듈에 그대로 쓴 뒤 결과를 보고한다.
+
+def _upn_from_request(request):
+    user_info = getattr(request, "_user", {}) or {}
+    return (
+        user_info.get("upn")
+        or user_info.get("preferred_username")
+        or user_info.get("email")
+        or ""
+    ).strip()
+
+
+def _text_field(data, name, max_len):
+    value = data.get(name) if isinstance(data, dict) else None
+    return value.strip()[:max_len] if isinstance(value, str) else None
+
+
+@api_view(["POST"])
+@token_required
+def open_packet(request):
+    """
+    문 열기 패킷 발급 (서명 대상 문이면 서명 패킷, 아니면 원본 패킷)
+
+    Request Body:
+        { "bleid": "306301" (선택, 서버가 찾은 값과 다르면 403), "retryOf": "<requestId>" (선택, 재시도) }
+    Response 200:
+        { "ok": true, "requestId", "packetHex", "signed", "keyVer", "counter", "bleid" }
+    403 권한 없음 / 429 요청 과다 / 426 구버전(미들웨어) / 500 패킷 생성 실패
+    """
+    upn = _upn_from_request(request)
+    if not upn:
+        return Response({"ok": False, "error": "UPN not found in token"}, status=status.HTTP_400_BAD_REQUEST)
+
+    data = request.data if isinstance(request.data, dict) else {}
+    requested_bleid = _text_field(data, "bleid", 16)
+    retry_of = _text_field(data, "retryOf", 36)
+    app_ver = (request.headers.get("X-App-Build") or "")[:20]
+    os_name = (request.headers.get("X-App-Platform") or "").lower()[:20]
+
+    db = DjangoDb()
+    req_id = str(uuid.uuid4())
+    now = datetime.now(KST)
+
+    try:
+        student_id = door_access.find_student_id(db, upn)
+        user_id = student_id or upn[:50]
+
+        # 패킷을 대량으로 받아 두는 것을 막는다 (사용자당 분당 10회). 모든 워커가 공유하도록 DB 로그로 센다.
+        if door_access.count_recent_requests(db, user_id) >= door_access.RATE_LIMIT_PER_MINUTE:
+            return Response({"ok": False, "error": "rate_limited"}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        if retry_of and not door_access.retry_of_is_valid(db, user_id, retry_of):
+            retry_of = None
+
+        try:
+            assignment = door_access.check_access(db, student_id, requested_bleid, now)
+        except door_access.AccessDenied as denied:
+            door_access.insert_issue_log(
+                db, req_id=req_id, retry_of=retry_of, user_id=user_id,
+                bleid=door_access.digits_only(requested_bleid), room=None, issued=False,
+                signed=None, key_ver=None, counter=None, app_ver=app_ver, os_name=os_name,
+            )
+            return Response({"ok": False, "error": "forbidden", "reason": denied.reason},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        frame = build_open_frame(assignment.bleid, now)
+        packet = build_door_packet(db, frame)
+
+        # 발급 로그는 응답 직전에 남긴다. 로그 실패가 문 열기를 막지는 않게 한다.
+        try:
+            door_access.insert_issue_log(
+                db, req_id=req_id, retry_of=retry_of, user_id=user_id,
+                bleid=assignment.bleid, room=assignment.room_num, issued=True,
+                signed=packet.signed, key_ver=packet.key_ver, counter=packet.counter,
+                app_ver=app_ver, os_name=os_name,
+            )
+        except Exception:
+            logger.exception("BLE_OPEN_LOG 발급 로그 기록 실패 (req=%s)", req_id)
+
+        return Response({
+            "ok": True,
+            "requestId": req_id,
+            "packetHex": packet.packet_hex,
+            "signed": packet.signed,
+            "keyVer": packet.key_ver,
+            "counter": packet.counter,
+            "bleid": assignment.bleid,
+        }, status=status.HTTP_200_OK)
+
+    except DoorPacketError as e:
+        # DoorPacketError 메시지에는 키 값이 들어가지 않는다.
+        logger.error("open_packet 패킷 생성 실패: %s", e)
+    except Exception:
+        logger.exception("open_packet 실패")
+    return Response({"ok": False, "error": "packet_failed"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@token_required
+def open_result(request):
+    """
+    문 열기 결과 보고 (참고용. 문이 실제로 열렸다는 증거는 아니다)
+
+    Request Body:
+        { "requestId", "result": "OK|NO_RESPONSE|BLE_FAIL|DOOR_FAIL", "stage", "doorResponseHex", "elapsedMs" }
+    본인이 발급받은 requestId 에 한 번만 기록할 수 있다.
+    """
+    upn = _upn_from_request(request)
+    if not upn:
+        return Response({"ok": False, "error": "UPN not found in token"}, status=status.HTTP_400_BAD_REQUEST)
+
+    data = request.data if isinstance(request.data, dict) else {}
+    req_id = _text_field(data, "requestId", 36)
+    result = _text_field(data, "result", 12)
+    if not req_id or result not in door_access.RESULT_CODES:
+        return Response({"ok": False, "error": "invalid_request"}, status=status.HTTP_400_BAD_REQUEST)
+
+    elapsed = data.get("elapsedMs")
+    elapsed_ms = elapsed if isinstance(elapsed, int) and not isinstance(elapsed, bool) and 0 <= elapsed <= 2**31 - 1 else None
+
+    try:
+        db = DjangoDb()
+        user_id = door_access.find_student_id(db, upn) or upn[:50]
+        updated = door_access.update_result_log(
+            db, req_id=req_id, user_id=user_id, result=result,
+            stage=_text_field(data, "stage", 20),
+            door_resp=_text_field(data, "doorResponseHex", 80),
+            elapsed_ms=elapsed_ms,
+        )
+    except Exception:
+        logger.exception("open_result 실패")
+        return Response({"ok": False, "error": "result_failed"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if not updated:
+        return Response({"ok": False, "error": "request_not_found"}, status=status.HTTP_404_NOT_FOUND)
+    return Response({"ok": True}, status=status.HTTP_200_OK)

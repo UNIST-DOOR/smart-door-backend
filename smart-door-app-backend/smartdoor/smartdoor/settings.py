@@ -24,6 +24,14 @@ if DEBUG:
         "10.0.2.2",
         # "192.168.219.102"
     ]
+    # 개발용: .env 의 DEV_EXTRA_ALLOWED_HOSTS(쉼표로 구분)로 PC 의 IP 등을 추가한다.
+    # 예) 아이폰 실기기가 같은 Wi-Fi 에서 이 PC 의 서버에 접속할 때: DEV_EXTRA_ALLOWED_HOSTS=192.168.0.107
+    # 운영 설정에는 적용되지 않는다.
+    ALLOWED_HOSTS += [
+        host.strip()
+        for host in os.environ.get("DEV_EXTRA_ALLOWED_HOSTS", "").split(",")
+        if host.strip()
+    ]
 else:
     ALLOWED_HOSTS = [
         "smartdoor-backend.unist.ac.kr",
@@ -44,6 +52,8 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "smartdoor.middleware.SetRemoteAddrFromForwardedFor",
     "smartdoor.middleware.MinBuildVersionMiddleware",
+    # 오래 쉰 DB 연결이 끊겨 있으면 첫 요청이 실패하므로 요청마다 점검 (최소 버전 거절은 DB 를 쓰지 않으니 그 뒤에 둔다)
+    "smartdoor.middleware.DbConnectionHealthMiddleware",
 ]
 
 ROOT_URLCONF = "smartdoor.urls"

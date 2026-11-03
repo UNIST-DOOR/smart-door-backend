@@ -7,4 +7,6 @@ urlpatterns = [
     path("api/me/", auth_views.me),
     path("api/room-info/", auth_views.room_info),
     path("api/door/log/", auth_views.door_log),
+    path("api/door/open-packet/", auth_views.open_packet),
+    path("api/door/open-result/", auth_views.open_result),
 ]

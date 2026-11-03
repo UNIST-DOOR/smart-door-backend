@@ -57,3 +57,20 @@ class MinBuildVersionMiddleware(MiddlewareMixin):
             return None
         return None
 
+
+class DbConnectionHealthMiddleware(MiddlewareMixin):
+    """요청을 처리하기 전에 DB 연결이 살아 있는지 확인하고, 죽어 있으면 닫아서 새로 연결하게 한다.
+
+    DB 서버나 중간 네트워크 장비가 쉬는 연결을 끊으면, 오래 쉰 뒤의 첫 요청이 죽은 연결로 쿼리를 보내
+    2013(Lost connection) 오류가 난다. 앱은 이 오류를 로그인 실패로 받아들이므로 요청마다 미리 점검한다.
+    점검 중 오류가 나도 요청 처리는 막지 않는다.
+    """
+
+    def process_request(self, request):
+        try:
+            from auth.door_db import close_dead_connection
+
+            close_dead_connection()
+        except Exception:
+            pass
+        return None
